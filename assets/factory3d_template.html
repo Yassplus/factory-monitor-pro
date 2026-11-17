@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:#0a0e17; overflow:hidden; font-family:monospace; }
+#c { width:100%; height:100%; display:block; }
+#ui { position:absolute; top:10px; left:10px; z-index:10; display:flex; gap:6px; flex-wrap:wrap; }
+.btn { background:rgba(15,25,45,0.92); border:1px solid #2a4060; color:#a0b8d8;
+  font:600 9px monospace; letter-spacing:1px; padding:6px 11px; border-radius:6px;
+  cursor:pointer; text-transform:uppercase; transition:all .15s; }
+.btn:hover { background:rgba(59,130,246,0.22); border-color:#3b82f6; color:#fff; }
+#legend { position:absolute; bottom:10px; left:10px; z-index:10;
+  background:rgba(8,12,22,0.90); border:1px solid #1a2d45; border-radius:8px;
+  padding:8px 12px; font:9px monospace; color:#8090a8;
+  display:flex; gap:12px; flex-wrap:wrap; max-width:580px; }
+.leg { display:flex; align-items:center; gap:4px; }
+.dot { width:9px; height:9px; border-radius:50%; flex-shrink:0; }
+#title { position:absolute; top:10px; right:10px; z-index:10;
+  background:rgba(8,12,22,0.90); border:1px solid #2a4a80; border-radius:8px;
+  padding:7px 13px; font:700 9px monospace; color:#a0c0e0; text-align:right; line-height:1.6; }
+#tt { position:absolute; pointer-events:none; z-index:20;
+  background:rgba(8,12,22,0.96); border:1px solid #2a4a80; border-radius:8px;
+  padding:9px 13px; font:11px monospace; color:#e2e8f0; display:none; line-height:1.7; min-width:170px; }
+</style>
+</head>
+<body>
+<div id="ui">
+  <button class="btn" onclick="setView('overview')">Overview</button>
+  <button class="btn" onclick="setView('entrance')">Entrance</button>
+  <button class="btn" onclick="setView('right')">Right Zone</button>
+  <button class="btn" onclick="setView('left')">Left Zone</button>
+  <button class="btn" onclick="setView('top')">Top View</button>
+</div>
+<div id="title"><span id="factoryTitle">FACTORY 5</span><br><span id="areaTitle">AREA</span><br>Simulation View</div>
+<div id="legend">
+  <div class="leg"><div class="dot" style="background:#22c55e"></div>ON</div>
+  <div class="leg"><div class="dot" style="background:#ef4444"></div>OFF</div>
+  <div class="leg"><div class="dot" style="background:#f59e0b"></div>MAINTENANCE</div>
+  <div class="leg"><div class="dot" style="background:#f5c518"></div>Workers</div>
+  <div class="leg"><div class="dot" style="background:#e8b804"></div>Forklifts</div>
+  <div class="leg"><div class="dot" style="background:#8b6c42"></div>Racks</div>
+  <div class="leg"><div class="dot" style="background:#d04808"></div>Robot/Torch Arm</div>
+</div>
+<div id="tt"></div>
+<canvas id="c"></canvas>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+const MACHINES = __MACHINES_JSON__;
+const AREA_KEY = "__AREA_KEY__";
+
+// Renderer
+const renderer = new THREE.WebGLRenderer({canvas:document.getElementById('c'),antialias:true});
+renderer.setSize(innerWidth,innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.shadowMap.enabled=true;
+renderer.shadowMap.type=THREE.PCFSoftShadowMap;
+renderer.toneMapping=THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure=0.88;
+
+const scene=new THREE.Scene();
+scene.background=new THREE.Color(0x0a0e17);
+scene.fog=new THREE.FogExp2(0x0a0e17,0.007);
+
+const cam=new THREE.PerspectiveCamera(42,innerWidth/innerHeight,0.1,500);
+
+// Lights
+scene.add(new THREE.AmbientLight(0x7080a0,0.55));
+const sun=new THREE.DirectionalLight(0xfff0e0,1.15);
+sun.position.set(20,80,-30); sun.castShadow=true;
+sun.shadow.mapSize.set(2048,2048);
+Object.assign(sun.shadow.camera,{left:-70,right:70,top:110,bottom:-5,near:1,far:230});
+sun.shadow.bias=-0.002; scene.add(sun);
+const fill=new THREE.DirectionalLight(0x4060a8,0.35); fill.position.set(-60,60,60); scene.add(fill);
+for(let i=0;i<4;i++){const sl=new THREE.PointLight(0xa0c0ff,0.65,55);sl.position.set(12+i*14,15,45);scene.add(sl);}
+
+// Material helpers
+function lam(c,op,em){
+  const m=new THREE.MeshLambertMaterial({color:c});
+  if(op!==undefined){m.transparent=true;m.opacity=op;}
+  if(em!==undefined) m.emissive=new THREE.Color(em);
+  return m;
+}
+const M={
+  floor:lam(0xb0b8c4), fl:lam(0x8890a0), wall:lam(0xc0c8d0,0.40),
+  col:lam(0x7a8290), sd:lam(0x40454e), sm:lam(0x5e646e), sl:lam(0x8a9098),
+  bp:lam(0x1e3258), scg:lam(0x0a9050,undefined,0x042818),
+  org:lam(0xc84008), yel:lam(0xf0c008),
+  ais:lam(0xf0c010,0.78), zL:lam(0x70c8b8,0.15), zR:lam(0x7090d0,0.15),
+  rack:lam(0x705830), pal:lam(0x907040),
+  g1:lam(0x9a6830), g2:lam(0x2a5898), g3:lam(0x702898), g4:lam(0x289050),
+  belt:lam(0x303038), glass:lam(0x60a0d0,0.38),
+  wBody:lam(0x1a3298), wVest:lam(0xd8b806), wHead:lam(0xc08050),
+  wHat:lam(0xf0c008), wBoot:lam(0x181210),
+  fkY:lam(0xe0b004), fkD:lam(0x605010),
+  teal:lam(0x10a090),
+};
+function stMat(s){return lam({ON:0x22c55e,OFF:0xef4444,MAINTENANCE:0xf59e0b}[s]||0x888888,
+  undefined,{ON:0x0a4020,OFF:0x3a0808,MAINTENANCE:0x3a2000}[s]||0);}
+
+// Geometry builders
+function B(w,h,d,mat,x,y,z,rx=0,ry=0,rz=0){
+  const m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),mat);
+  m.position.set(x,y,z);m.rotation.set(rx,ry,rz);
+  m.castShadow=true;m.receiveShadow=true;scene.add(m);return m;
+}
+function C(rt,rb,h,seg,mat,x,y,z,rx=0,rz=0){
+  const m=new THREE.Mesh(new THREE.CylinderGeometry(rt,rb,h,seg),mat);
+  m.position.set(x,y,z);m.rotation.set(rx,0,rz);m.castShadow=true;scene.add(m);return m;
+}
+function Sp(r,mat,x,y,z){
+  const m=new THREE.Mesh(new THREE.SphereGeometry(r,14,10),mat);
+  m.position.set(x,y,z);m.castShadow=true;scene.add(m);return m;
+}
+function armSeg(pts,mat,r=0.17){
+  for(let i=0;i<pts.length-1;i++){
+    const a=new THREE.Vector3(...pts[i]),b=new THREE.Vector3(...pts[i+1]);
+    const mid=a.clone().lerp(b,.5),len=a.distanceTo(b);
+    const sg=new THREE.Mesh(new THREE.CylinderGeometry(r,r,len,8),mat);
+    sg.position.copy(mid);sg.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),b.clone().sub(a).normalize());
+    sg.castShadow=true;scene.add(sg);
+  }
+}
+function stLight(x,y,z,st){
+  Sp(0.23,stMat(st),x,y,z);
+  const pl=new THREE.PointLight({ON:0x22c55e,OFF:0xef4444,MAINTENANCE:0xf59e0b}[st]||0x888888,st==='ON'?0.75:0.15,3.5);
+  pl.position.set(x,y,z);scene.add(pl);
+}
+function makeLbl(text,x,y,z,w=4.5){
+  const cv2=document.createElement('canvas');cv2.width=256;cv2.height=44;
+  const ctx=cv2.getContext('2d');
+  ctx.fillStyle='rgba(6,10,20,0.86)';ctx.beginPath();
+  if(ctx.roundRect)ctx.roundRect(2,2,252,40,7);else ctx.rect(2,2,252,40);
+  ctx.fill();
+  ctx.font='bold 15px monospace';ctx.fillStyle='#b0c8e8';ctx.textAlign='center';
+  const t=text.length>22?text.slice(0,21)+'..':text;ctx.fillText(t,128,27);
+  const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:new THREE.CanvasTexture(cv2),transparent:true}));
+  sp.position.set(x,y,z);sp.scale.set(w,0.77,1);scene.add(sp);
+}
+
+// -- MACHINE BUILDERS (x,z = floor center) -----------------------------------
+function mkPress(x,z,st){
+  B(5.5,1.8,3.8,M.sd,x,0.9,z);
+  B(0.7,6.2,2.8,M.sd,x-2.2,4,z);B(0.7,6.2,2.8,M.sd,x+2.2,4,z);
+  B(5.8,0.82,3.2,M.sm,x,7.4,z);
+  B(2.4,2.6,2.0,M.sl,x,3.4,z);
+  C(0.62,0.65,1.2,12,M.sd,x,6.85,z);C(0.36,0.36,2.6,10,M.sl,x,4.5,z);
+  B(0.4,2.2,1.8,M.bp,x+3.3,2.2,z);B(0.05,1.0,0.9,M.scg,x+3.33,2.6,z);
+  stLight(x+3.45,3.6,z,st);
+}
+function mkAssembly(x,z,st){
+  for(const lx of[x-3.2,x,x+3.2])B(0.25,0.95,3.9,M.sm,lx,0.475,z);
+  B(8,0.14,4.5,M.sl,x,0.95,z);
+  B(0.12,1.5,2.0,M.sd,x+3.5,1.85,z);B(0.05,1.3,1.85,M.scg,x+3.53,1.9,z);
+  C(0.08,0.08,0.45,8,M.sm,x+3.5,0.97,z);
+  [[0x1a4888],[0x881a1a],[0x886818]].forEach(([c],i)=>B(1.5,0.55,1.5,lam(c),x-3+i*1.8,1.3,z-1.3));
+  B(1.9,1.8,0.28,M.sm,x-4,1.2,z-2.1);
+  stLight(x+3.6,3.7,z-0.8,st);
+}
+function mkWelder(x,z,st){
+  B(4.2,4.2,3.2,M.sd,x,2.1,z);
+  B(4.0,1.8,0.1,M.bp,x,2.2,z-1.65);B(2.4,1.0,0.06,M.scg,x,2.6,z-1.66);
+  armSeg([[x+2.1,4.2,z],[x+2.1,5.0,z],[x+3.6,5.0,z-0.7]],M.sm,0.13);
+  C(0.13,0.09,0.26,8,lam(0xd08010),x+3.6,5.0,z-0.7);
+  B(0.8,2.2,1.4,lam(0x101820),x+3.0,1.4,z+1.3);
+  stLight(x+3.3,4.4,z+1.0,st);
+}
+function mkDrill(x,z,st){
+  B(2.8,0.55,2.8,M.sd,x,0.275,z);C(0.38,0.38,5.5,10,M.sd,x,3.25,z);
+  B(2.4,1.4,2.4,M.sd,x,5.7,z);C(0.22,0.22,1.2,10,M.sl,x,4.1,z);
+  C(0.12,0.12,1.3,8,M.sm,x,3.3,z);B(3.2,0.2,3.2,M.sm,x,2.2,z);
+  stLight(x+1.8,7.0,z,st);
+}
+function mkMixer(x,z,st){
+  B(4.0,1.2,4.0,M.sd,x,0.6,z);C(1.5,1.8,2.0,16,M.sm,x,2.2,z);
+  C(1.3,1.3,0.15,16,M.sl,x,3.22,z);C(0.25,0.25,3.5,10,M.sd,x,3.75,z);
+  C(0.6,0.6,0.8,12,M.sd,x,5.55,z);
+  B(0.4,1.8,1.8,M.bp,x+2.3,1.6,z);B(0.05,0.9,0.8,M.scg,x+2.33,1.9,z);
+  stLight(x+2.5,2.7,z,st);
+}
+function mkBandSaw(x,z,st){
+  B(3.8,3.5,2.8,lam(0x585040),x,1.75,z);B(1.0,2.8,2.0,lam(0x403828),x-1.0,5.4,z+0.2);
+  B(0.04,6.0,0.04,M.sl,x-0.8,4.3,z);B(4.2,0.2,3.2,lam(0x807860),x,3.3,z);
+  B(3.0,0.28,0.2,lam(0x989070),x-0.4,3.5,z-1.7);stLight(x+1.8,3.8,z,st);
+}
+function mkWeldCell(x,z,st){
+  B(5.5,0.85,4.0,M.sd,x,0.425,z);B(5.1,0.12,3.6,M.sl,x,0.86,z);
+  B(0.4,4.2,0.4,M.org,x-2.2,2.1,z-2.0);
+  armSeg([[x-2.2,4.2,z-2.0],[x-2.2,4.8,z-2.0],[x+0.6,4.8,z+0.8],[x+1.1,4.8,z+1.1]],M.org,0.14);
+  C(0.11,0.08,0.24,8,lam(0xf0a000),x+1.1,4.8,z+1.1);
+  if(st==='ON'){const sp=new THREE.PointLight(0xffe060,1.6,4);sp.position.set(x+1.2,4.82,z+1.15);scene.add(sp);}
+  B(0.8,2.2,1.4,lam(0x101820),x+3.3,1.4,z+1.0);stLight(x+3.5,3.5,z+0.5,st);
+}
+function mkVertical(x,z,st){
+  B(5.5,1.4,4.2,M.sd,x,0.7,z);C(0.5,0.5,6.5,12,M.sd,x,4.65,z);
+  B(3.8,1.4,2.6,lam(0x303848),x,6.7,z);C(2.4,2.4,0.5,24,M.sm,x,1.65,z);
+  C(0.36,0.36,2.4,10,M.sl,x,3.2,z);C(1.2,1.2,0.18,32,M.teal,x,1.95,z);
+  C(0.9,0.9,0.22,32,lam(0x080810),x,1.96,z);
+  B(0.45,2.5,2.0,M.bp,x+3.5,1.9,z);B(0.06,1.0,0.9,M.scg,x+3.52,2.1,z);
+  stLight(x+3.6,3.3,z+0.6,st);
+}
+function mkAutoWeld(x,z,st){
+  B(8.5,5.0,5.5,lam(0x181f2a),x,2.5,z);
+  B(8.3,2.5,0.08,M.bp,x,3.2,z-2.85);B(6.5,1.5,0.06,M.scg,x,3.5,z-2.86);
+  C(0.55,0.65,0.6,16,lam(0xb84010),x,5.3,z);
+  armSeg([[x,5.6,z],[x,6.2,z],[x+3.0,6.2,z-0.8],[x+4.5,6.2,z-1.5],[x+4.5,5.0,z-1.8]],M.org,0.22);
+  C(0.16,0.11,0.26,8,lam(0xf0a000),x+4.5,5.0,z-1.8);
+  if(st==='ON'){const sp=new THREE.PointLight(0xffe060,2.0,5);sp.position.set(x+4.6,5.0,z-1.85);scene.add(sp);}
+  B(9.9,2.2,0.12,lam(0x5080b0,0.22),x+4.0,1.1,z+2.9);B(9.9,2.2,0.12,lam(0x5080b0,0.22),x+4.0,1.1,z-2.9);
+  B(0.12,2.2,5.5,lam(0x5080b0,0.22),x-0.6,1.1,z);B(0.12,2.2,5.5,lam(0x5080b0,0.22),x+9.2,1.1,z);
+  stLight(x-0.3,5.3,z+2.6,st);
+}
+function mkConveyor(x,z,_st){
+  B(14,0.4,2.5,M.sm,x+7,0.2,z);
+  for(let i=0;i<9;i++)C(0.25,0.25,2.5,8,M.sl,x+0.8+i*1.5,0.42,z,Math.PI/2);
+  B(14,0.05,2.5,M.belt,x+7,0.45,z);C(0.7,0.7,1.4,12,M.sd,x+13.5,0.78,z);
+  [[x+1,0x9a6830],[x+4.5,0x2a5090],[x+8,0x702090],[x+11,0x289050]].forEach(([bx,c])=>B(1.6,0.7,1.5,lam(c),bx,0.77,z));
+}
+function mkFormTap(x,z,st){
+  B(3.5,0.8,3.0,M.sd,x,0.4,z);C(0.4,0.4,4.0,10,M.sd,x,2.8,z);
+  B(3.2,1.2,2.8,M.sm,x,5.0,z);C(0.2,0.2,1.5,8,M.sl,x,3.85,z);
+  B(3.5,0.18,3.0,M.sm,x,2.3,z);B(0.4,2.0,1.6,M.bp,x+2.0,1.8,z);
+  stLight(x+2.2,3.0,z,st);
+}
+function mkMultiDrill(x,z,st){
+  B(5.0,1.0,4.0,M.sd,x,0.5,z);B(5.0,4.5,0.4,M.sd,x,3.25,z-2.2);
+  B(4.8,1.2,3.8,M.sm,x,5.6,z);
+  for(let i=0;i<3;i++)C(0.15,0.15,2.0,8,M.sl,x-1.4+i*1.4,3.5,z);
+  B(5.2,0.2,4.2,M.sm,x,2.4,z);stLight(x+2.5,6.9,z,st);
+}
+function mkCupWeld(x,z,st){
+  B(5.0,1.0,4.0,M.sd,x,0.5,z);B(4.8,0.14,3.8,M.sl,x,1.04,z);
+  B(0.4,3.8,0.4,M.org,x-2.0,2.5,z-1.8);
+  armSeg([[x-2.0,3.8,z-1.8],[x-2.0,4.4,z-1.8],[x+0.8,4.4,z+0.6],[x+1.2,4.4,z+1.0]],M.org,0.14);
+  C(0.11,0.08,0.22,8,lam(0xf0a000),x+1.2,4.4,z+1.0);
+  if(st==='ON'){const sp=new THREE.PointLight(0xffe060,1.4,4);sp.position.set(x+1.3,4.4,z+1.05);scene.add(sp);}
+  B(0.7,2.0,1.2,lam(0x101820),x+3.0,1.3,z+0.8);stLight(x+3.2,3.2,z+0.4,st);
+}
+function mkCupFormMixer(x,z,st){
+  B(3.5,0.9,3.5,M.sd,x,0.45,z);C(1.2,1.4,1.6,16,M.sm,x,1.9,z);
+  C(1.05,1.05,0.14,16,M.sl,x,2.72,z);C(0.22,0.22,2.8,10,M.sd,x,3.6,z);
+  C(0.55,0.55,0.7,12,M.sd,x,5.05,z);
+  B(0.4,1.6,1.6,M.bp,x+2.0,1.4,z);stLight(x+2.2,2.5,z,st);
+}
+function mkSaw(x,z,st){
+  B(3.8,3.5,2.8,lam(0x585040),x,1.75,z);B(1.0,2.8,2.0,lam(0x403828),x-1.0,5.4,z+0.2);
+  B(0.04,6.0,0.04,M.sl,x-0.8,4.3,z);B(4.2,0.2,3.2,lam(0x807860),x,3.3,z);
+  B(3.0,0.28,0.2,lam(0x989070),x-0.4,3.5,z-1.7);stLight(x+1.8,3.8,z,st);
+}
+
+// -- WORKER builder -----------------------------------------------------------
+function mkWorker(x,y,z){
+  B(0.24,0.22,0.36,M.wBoot,x-0.2,y+0.11,z);B(0.24,0.22,0.36,M.wBoot,x+0.2,y+0.11,z);
+  B(0.28,0.78,0.3,M.wBody,x-0.18,y+0.61,z);B(0.28,0.78,0.3,M.wBody,x+0.18,y+0.61,z);
+  B(0.64,0.86,0.34,M.wBody,x,y+1.43,z);B(0.60,0.68,0.35,M.wVest,x,y+1.42,z);
+  [1.18,1.52].forEach(sy=>B(0.61,0.065,0.36,lam(0xffd700,undefined,0x443300),x,y+sy,z));
+  B(0.22,0.68,0.22,M.wBody,x-0.44,y+1.32,z);B(0.22,0.68,0.22,M.wBody,x+0.44,y+1.32,z);
+  Sp(0.14,lam(0xf5c518),x-0.44,y+0.93,z);Sp(0.14,lam(0xf5c518),x+0.44,y+0.93,z);
+  C(0.1,0.1,0.2,8,M.wHead,x,y+1.97,z);Sp(0.28,M.wHead,x,y+2.34,z);
+  Sp(0.30,M.wHat,x,y+2.53,z);B(0.72,0.06,0.52,M.wHat,x,y+2.38,z);
+}
+
+// Worker offset positions around a machine (max 5)
+const WOS=[
+  [0,0,3.2],[-2.5,0,3.2],[2.5,0,3.2],[0,0,-3.2],[-2.5,0,-3.2]
+];
+
+// -- FORKLIFT builder ---------------------------------------------------------
+function mkForklift(x,z){
+  B(1.0,2.8,2.5,M.fkD,x-0.5,1.4,z);B(4.2,2.8,2.5,M.fkY,x+2.1,1.4,z);
+  B(2.2,1.6,1.9,lam(0xc8a004),x+2.4,3.7,z);B(2.1,0.08,1.0,M.glass,x+2.4,4.0,z-1.0);
+  [x+4.65,x+4.9].forEach(mx=>B(0.22,5.2,1.7,M.sm,mx,2.6,z));
+  B(0.35,0.5,1.9,M.sl,x+4.6,1.8,z);
+  [-0.7,0.7].forEach(fz=>B(2.8,0.15,0.22,M.sl,x+5.95,1.92,z+fz));
+  [[x+0.7,z-1.25],[x+0.7,z+1.25],[x+3.5,z-1.25],[x+3.5,z+1.25]].forEach(([wx,wz])=>{
+    C(0.5,0.5,0.4,14,lam(0x181818),wx,0.5,wz,0,Math.PI/2);
+    C(0.22,0.22,0.42,10,lam(0x606060),wx,0.5,wz,0,Math.PI/2);
+  });
+}
+
+// -----------------------------------------------------------------------------
+// LAYOUT &#8212; exact machine positions for A1 and A2
+// -----------------------------------------------------------------------------
+const A1=[
+  {n:'RASA Saw',              x:8,  z:83,fn:mkPress},
+  {n:'Assembly Station',      x:8,  z:75,fn:mkAssembly},
+  {n:'Welding Machine 1',     x:8,  z:67,fn:mkWelder},
+  {n:'Welding Machine 2',     x:8,  z:60,fn:mkWelder},
+  {n:'Welding Machine 3',     x:8,  z:53,fn:mkWelder},
+  {n:'Welding Machine 4',     x:8,  z:46,fn:mkWelder},
+  {n:'Welding Machine 5',     x:8,  z:39,fn:mkWelder},
+  {n:'Drill',                 x:8,  z:31,fn:mkDrill},
+  {n:'Drill',                 x:15, z:31,fn:mkDrill},
+  {n:'Manual Saw 1',          x:38, z:83,fn:mkBandSaw},
+  {n:'Manual Saw 2',          x:46, z:83,fn:mkBandSaw},
+  {n:'Leadgers Welding 1',    x:38, z:75,fn:mkWeldCell},
+  {n:'Leadgers Welding 2',    x:38, z:68,fn:mkWeldCell},
+  {n:'Leadgers Welding 3',    x:38, z:61,fn:mkWeldCell},
+  {n:'Leadgers Welding 4',    x:38, z:54,fn:mkWeldCell},
+  {n:'Leadgers Welding 5',    x:38, z:47,fn:mkWeldCell},
+  {n:'Leadgers Welding 6',    x:38, z:40,fn:mkWeldCell},
+  {n:'Ring Vertical 1',       x:46, z:75,fn:mkVertical},
+  {n:'Ring Vertical 2',       x:46, z:68,fn:mkVertical},
+  {n:'Ring Vertical 3',       x:46, z:61,fn:mkVertical},
+  {n:'Cup Vertical 1',        x:46, z:54,fn:mkVertical},
+  {n:'Cup Vertical 2',        x:46, z:47,fn:mkVertical},
+  {n:'Cup Vertical 3',        x:46, z:40,fn:mkVertical},
+  {n:'Cup Vertical 4',        x:46, z:33,fn:mkVertical},
+  {n:'Auto Welding',          x:38, z:25,fn:mkAutoWeld},
+  {n:'Production Sorting Area',x:42,z:13,fn:mkConveyor},
+];
+const A2=[
+  {n:'Mixer 1',               x:8,  z:90,fn:mkMixer},
+  {n:'Mixer 2',               x:16, z:90,fn:mkMixer},
+  {n:'Cup Frame Form Mixer 1',x:8,  z:82,fn:mkCupFormMixer},
+  {n:'Cup Frame Form Mixer 2',x:16, z:82,fn:mkCupFormMixer},
+  {n:'Drrill 1',              x:7,  z:74,fn:mkDrill},
+  {n:'Drrill 2',              x:13, z:74,fn:mkDrill},
+  {n:'Drrill 3',              x:19, z:74,fn:mkDrill},
+  {n:'Form & Tap',            x:12, z:66,fn:mkFormTap},
+  {n:'Weld Cell 1',           x:7,  z:58,fn:mkWeldCell},
+  {n:'Weld Cell 2',           x:16, z:58,fn:mkWeldCell},
+  {n:'Weld Cell 3',           x:7,  z:51,fn:mkWeldCell},
+  {n:'Weld Cell 4',           x:16, z:51,fn:mkWeldCell},
+  {n:'Weld Cell 5',           x:7,  z:44,fn:mkWeldCell},
+  {n:'Weld Cell 6',           x:16, z:44,fn:mkWeldCell},
+  {n:'Forming ',              x:12, z:36,fn:mkFormTap},
+  {n:'Tap',                   x:12, z:28,fn:mkFormTap},
+  {n:'Mixer 3',               x:38, z:90,fn:mkMixer},
+  {n:'Mixer 4',               x:46, z:90,fn:mkMixer},
+  {n:'Drill 4',               x:36, z:82,fn:mkDrill},
+  {n:'Drill 5',               x:43, z:82,fn:mkDrill},
+  {n:'Drill 6',               x:50, z:82,fn:mkDrill},
+  {n:'Saw ',                  x:43, z:74,fn:mkSaw},
+  {n:'Drill 7',               x:36, z:66,fn:mkDrill},
+  {n:'Drill 8',               x:43, z:66,fn:mkDrill},
+  {n:'Drill 9',               x:50, z:66,fn:mkDrill},
+  {n:'Multi Drill ',          x:43, z:58,fn:mkMultiDrill},
+  {n:'Cup Weld 1',            x:38, z:50,fn:mkCupWeld},
+  {n:'Cup Weld 2',            x:46, z:50,fn:mkCupWeld},
+  {n:'Mixer 5',               x:38, z:42,fn:mkMixer},
+  {n:'Mixer 6',               x:46, z:42,fn:mkMixer},
+];
+
+// -- F4 Area 1 layout --
+const F4A1=[
+  {n:'Manual Saw 1',              x:10, z:9,   fn:mkBandSaw},
+  {n:'Manual Saw 2',              x:18, z:9,   fn:mkBandSaw},
+  {n:'ECO Punch Press',           x:14, z:18,  fn:mkDrill},
+  {n:'TECH Punch / Drill',        x:14, z:28,  fn:mkDrill},
+  {n:'ECO Punch + TECH Press',    x:14, z:38,  fn:mkDrill},
+  {n:'Welding Package',           x:14, z:46,  fn:mkWeldCell},
+  {n:'Pre-Assembly Welding Robot',x:14, z:56,  fn:mkAutoWeld},
+  {n:'9-Frame Assembly',          x:14, z:67,  fn:mkAssembly},
+  {n:'Welding Robot',             x:14, z:77,  fn:mkAutoWeld},
+  {n:'Auto Saw',                  x:46, z:10,  fn:mkBandSaw},
+  {n:'Presses',                   x:42, z:19,  fn:mkPress},
+  {n:'Presses',                   x:50, z:19,  fn:mkPress},
+  {n:'Welding Station',           x:46, z:27,  fn:mkWeldCell},
+  {n:'Delivery / QC',             x:46, z:36,  fn:mkAssembly},
+  {n:'Grinding',                  x:46, z:44,  fn:mkDrill},
+];
+
+// -- F4 Area 2 layout --
+const F4A2=[
+  {n:'Raw Material Storage',               x:15, z:7,  fn:mkConveyor, zone:true},
+  {n:'Saw Machine',                        x:15, z:22, fn:mkBandSaw},
+  {n:'Manual Assembly Tools',              x:15, z:33, fn:mkAssembly, zone:true},
+  {n:'Storage Cabinet',                    x:15, z:42, fn:mkAssembly, zone:true},
+  {n:'Ready Acrow Board Pallets',          x:15, z:53, fn:mkConveyor, zone:true},
+  {n:'Pallet Assembly Spread',             x:15, z:65, fn:mkConveyor},
+  {n:'Assembly RM Storage',               x:47, z:7,  fn:mkConveyor, zone:true},
+  {n:'CNC Router Machine',                x:47, z:23, fn:mkVertical},
+  {n:'WIP + Transport Carts + Cabinet Zone', x:47, z:34, fn:mkAssembly, zone:true},
+  {n:'TECH, ECO & WIP Area',              x:47, z:45, fn:mkAssembly, zone:true},
+  {n:'Paint / Coating Station',           x:47, z:59, fn:mkAutoWeld},
+];
+
+const LAYOUT = AREA_KEY==='F5_A2'?A2:AREA_KEY==='F4_A1'?F4A1:AREA_KEY==='F4_A2'?F4A2:A1;
+const SZ = AREA_KEY==='F4_A1'?90:AREA_KEY==='F4_A2'?78:AREA_KEY==='F5_A2'?100:95;
+
+// -- FLOOR + STRUCTURE --------------------------------------------------------
+B(60,0.3,SZ,M.floor,30,0,SZ/2);
+for(let gx=0;gx<=60;gx+=5)B(0.06,0.05,SZ,M.fl,gx,-0.1,SZ/2);
+for(let gz=0;gz<=SZ;gz+=5)B(60,0.05,0.06,M.fl,30,-0.1,gz);
+B(25,0.06,SZ-10,M.zL,13.5,-0.1,SZ/2);
+B(25,0.06,SZ-10,M.zR,46.5,-0.1,SZ/2);
+B(0.5,0.08,SZ,M.ais,29,-0.05,SZ/2);B(0.5,0.08,SZ,M.ais,31,-0.05,SZ/2);
+const latZ=AREA_KEY==='F5_A2'?SZ*0.55:AREA_KEY==='F4_A1'?50:AREA_KEY==='F4_A2'?40:30;
+B(60,0.08,0.5,M.ais,30,-0.05,latZ);B(60,0.08,0.5,M.ais,30,-0.05,latZ+2);
+
+const WH=10.5;
+B(60,WH,0.4,M.wall,30,WH/2,-0.2);B(60,WH,0.4,M.wall,30,WH/2,SZ+0.2);
+B(0.4,WH,SZ,M.wall,-0.2,WH/2,SZ/2);B(0.4,WH,SZ,M.wall,60.2,WH/2,SZ/2);
+[[0,0],[60,0],[0,SZ],[60,SZ],[30,0],[0,SZ/2],[60,SZ/2],[30,SZ]].forEach(([cx,cz])=>B(0.8,WH,0.8,M.col,cx,WH/2,cz));
+for(let by=5;by<SZ;by+=20)B(60,0.5,0.5,M.col,30,WH+0.25,by);
+[[10,20],[10,50],[10,75],[36,20],[36,50],[36,75]].forEach(([sx,sz])=>{
+  if(sz>SZ-5)return;
+  const sk=new THREE.Mesh(new THREE.PlaneGeometry(12,8),
+    new THREE.MeshLambertMaterial({color:0x70b8ff,transparent:true,opacity:0.30,emissive:new THREE.Color(0x102030)}));
+  sk.rotation.x=-Math.PI/2;sk.position.set(sx,WH+0.05,sz);scene.add(sk);
+});
+
+// -- BUILD ALL MACHINES + WORKERS ---------------------------------------------
+const pickMeshes=[];
+LAYOUT.forEach(slot=>{
+  // Find matching machine from data (exact name or prefix match with trailing spaces/numbers)
+  const mdata=MACHINES.find(m=>m.name.trim()===slot.n.trim())
+    ||MACHINES.find(m=>m.name.trim().replace(/\s*\d+$/,'')===slot.n.trim().replace(/\s*\d+$/,''));
+  const isZone = slot.zone===true || (mdata && mdata.status==='-');
+  const st=isZone?'ZONE':(mdata?mdata.status:'ON');
+  const ops=isZone?0:(mdata?mdata.operators:1);
+
+  // Build machine geometry -- zone entries use a lighter/muted appearance
+  if(isZone){
+    // Draw a flat storage/zone platform instead of a machine
+    B(6,0.3,5,M.sm,slot.x,0.15,slot.z);            // floor platform
+    B(5.8,0.08,4.8,M.zL,slot.x,0.32,slot.z);        // zone overlay
+    B(0.2,2.0,5,M.col,slot.x-2.8,1.0,slot.z);       // shelf upright L
+    B(0.2,2.0,5,M.col,slot.x+2.8,1.0,slot.z);       // shelf upright R
+    B(5.8,0.15,4.8,M.rack,slot.x,1.5,slot.z);        // shelf
+    // No status light -- zone entries don't have machine lights
+  } else {
+    slot.fn(slot.x,slot.z,st);
+  }
+
+  // Label (zone entries shown slightly faded)
+  makeLbl(slot.n,slot.x,10.2,slot.z, isZone?3.8:4.5);
+
+  // Invisible pick target for tooltip
+  const ph=new THREE.Mesh(new THREE.BoxGeometry(5.5,9,5.5),
+    new THREE.MeshBasicMaterial({transparent:true,opacity:0}));
+  ph.position.set(slot.x,4.5,slot.z);ph.userData={n:slot.n,mdata,isZone};
+  scene.add(ph);pickMeshes.push(ph);
+
+  // Place workers only for active machines (not zone/storage entries)
+  if(!isZone){
+    const wCount=Math.min(ops,5);
+    for(let w=0;w<wCount;w++){
+      const off=WOS[w];
+      mkWorker(slot.x+off[0],0.3,slot.z+off[2]);
+    }
+  }
+});
+
+// -- STORAGE RACKS ------------------------------------------------------------
+for(let i=0;i<5;i++){
+  const rz=8+i*18;if(rz+5>SZ)break;
+  [55.2,59.5].forEach(px=>{B(0.3,7.5,0.3,M.rack,px,3.75,rz);B(0.3,7.5,0.3,M.rack,px,3.75,rz+5);});
+  [1.8,4.0,6.2].forEach(sh=>{
+    B(4.6,0.18,0.2,M.rack,57.35,sh,rz);B(4.6,0.18,0.2,M.rack,57.35,sh,rz+5);
+    [0,1].forEach(pi=>{
+      B(1.9,0.18,5.0,M.pal,55.4+pi*2.4,sh+0.18,rz+2.5);
+      B(1.9,0.8,5.0,[M.g1,M.g2,M.g3,M.g4][pi%4],55.4+pi*2.4,sh+0.67,rz+2.5);
+    });
+  });
+}
+
+// -- FORKLIFTS ----------------------------------------------------------------
+mkForklift(23,latZ+6); mkForklift(23,latZ-9);
+
+// -- ZONE LABELS --------------------------------------------------------------
+makeLbl('RIGHT ZONE (RM Entrance side)',13,11.0,SZ-2,7.5);
+makeLbl('LEFT ZONE',                   47,11.0,SZ-2,5.5);
+makeLbl('RM ENTRANCE',                 30,11.8,SZ+3,6);
+makeLbl('FG EXIT',                     30,11.8,-3,  5.5);
+
+// -- CAMERA -------------------------------------------------------------------
+const ctr=new THREE.Vector3(30,4,SZ/2);
+let theta=0.45,phi=0.52,radius=95;
+
+const VIEWS={
+  overview:()=>{theta=0.45;phi=0.52;radius=95;ctr.set(30,4,SZ/2);},
+  entrance:()=>{theta=0.0; phi=0.45;radius=75;ctr.set(30,3,SZ-8);},
+  right:   ()=>{theta=0.2; phi=0.50;radius=60;ctr.set(12,4,SZ/2);},
+  left:    ()=>{theta=-0.2;phi=0.50;radius=60;ctr.set(45,4,SZ/2);},
+  top:     ()=>{theta=0.01;phi=1.52;radius=90;ctr.set(30,0,SZ/2);},
+};
+window.setView=n=>{if(VIEWS[n])VIEWS[n]();};
+
+let drag=false,lmx=0,lmy=0;
+const cv=document.getElementById('c');
+cv.addEventListener('mousedown',e=>{drag=true;lmx=e.clientX;lmy=e.clientY;});
+cv.addEventListener('mouseup',()=>drag=false);
+
+const mouse2=new THREE.Vector2();
+cv.addEventListener('mousemove',e=>{
+  if(drag){theta+=(e.clientX-lmx)*0.006;phi-=(e.clientY-lmy)*0.005;phi=Math.max(.1,Math.min(1.55,phi));}
+  lmx=e.clientX;lmy=e.clientY;
+  mouse2.x=(e.clientX/innerWidth)*2-1;mouse2.y=-(e.clientY/innerHeight)*2+1;
+});
+cv.addEventListener('wheel',e=>{radius=Math.max(22,Math.min(180,radius+e.deltaY*.18));},{passive:true});
+let ts=null;
+cv.addEventListener('touchstart',e=>{if(e.touches.length===1)ts={x:e.touches[0].clientX,y:e.touches[0].clientY};});
+cv.addEventListener('touchmove',e=>{
+  if(!ts||e.touches.length!==1)return;
+  theta+=(e.touches[0].clientX-ts.x)*0.006;phi-=(e.touches[0].clientY-ts.y)*0.005;
+  phi=Math.max(.1,Math.min(1.55,phi));ts={x:e.touches[0].clientX,y:e.touches[0].clientY};
+});
+
+// Tooltip
+const ray2=new THREE.Raycaster(),tt=document.getElementById('tt');
+let lastHit=null;
+cv.addEventListener('mousemove',()=>{
+  ray2.setFromCamera(mouse2,cam);
+  const hits=ray2.intersectObjects(pickMeshes);
+  if(hits.length){
+    const d=hits[0].object.userData;
+    if(d.n!==lastHit){
+      lastHit=d.n;
+      if(d.isZone){
+        tt.innerHTML=`<b style="color:#94a3b8">${d.n}</b><br><span style="color:#64748b">Zone / Storage Area</span><br>No machine status`;
+      } else {
+        const m=d.mdata;
+        if(m){
+          const sc={ON:'#22c55e',OFF:'#ef4444',MAINTENANCE:'#f59e0b'}[m.status]||'#888';
+          tt.innerHTML=`<b style="color:#e2e8f0">${m.name}</b><br>Status: <b style="color:${sc}">${m.status}</b><br>Zone: ${m.zone}<br>Operators: ${m.operators}`;
+        } else {
+          tt.innerHTML=`<b style="color:#e2e8f0">${d.n}</b>`;
+        }
+      }
+    }
+    tt.style.display='block';
+    const ev=window.event;if(ev){tt.style.left=(ev.clientX+14)+'px';tt.style.top=(ev.clientY-8)+'px';}
+  } else {tt.style.display='none';lastHit=null;}
+});
+
+const areaLabels={'F5_A1':'AREA 1','F5_A2':'AREA 2','F4_A1':'AREA 1','F4_A2':'AREA 2'};
+const factoryLabels={'F5_A1':'FACTORY 5','F5_A2':'FACTORY 5','F4_A1':'FACTORY 4','F4_A2':'FACTORY 4'};
+document.getElementById('areaTitle').textContent=areaLabels[AREA_KEY]||'AREA';
+document.getElementById('factoryTitle').textContent=factoryLabels[AREA_KEY]||'FACTORY';
+
+// -- RENDER LOOP ---------------------------------------------------------------
+function animate(){
+  requestAnimationFrame(animate);
+  const cx=ctr.x+radius*Math.sin(phi)*Math.cos(theta);
+  const cy=ctr.y+radius*Math.cos(phi);
+  const cz=ctr.z+radius*Math.sin(phi)*Math.sin(theta);
+  cam.position.set(cx,cy,cz);cam.lookAt(ctr);
+  renderer.render(scene,cam);
+}
+animate();
+window.addEventListener('resize',()=>{
+  renderer.setSize(innerWidth,innerHeight);
+  cam.aspect=innerWidth/innerHeight;cam.updateProjectionMatrix();
+});
+</script>
+</body>
+</html>
