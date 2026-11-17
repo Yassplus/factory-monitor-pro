@@ -2,7 +2,7 @@
 
 A shop floor monitoring dashboard for a metal formwork and scaffolding manufacturer. It shows the live status of every machine on the real AutoCAD floor layout, checks operator coverage against the standard crew, and rolls up uptime across factories and areas.
 
-**Live app:** _link added after deployment_
+**Live app:** https://factory-monitor-pro.streamlit.app
 
 ## What it does
 
